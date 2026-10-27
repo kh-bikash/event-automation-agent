@@ -1,0 +1,14 @@
+services:
+  agent:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      APP_DB: /data/events.sqlite3
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - agent_data:/data
+    restart: unless-stopped
+volumes:
+  agent_data:

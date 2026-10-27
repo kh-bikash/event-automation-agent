@@ -20,6 +20,9 @@ def main() -> None:
     secret = os.environ.get("WEBHOOK_SECRET", "").encode()
     if len(secret) < 16:
         raise SystemExit("Set WEBHOOK_SECRET to at least 16 bytes")
+    admin_token = os.environ.get("ADMIN_TOKEN", "")
+    if admin_token and len(admin_token) < 16:
+        raise SystemExit("ADMIN_TOKEN must be at least 16 characters")
 
     def log_event(payload: dict) -> None:
         logger.info("processed event keys=%s", sorted(payload))
@@ -65,9 +68,8 @@ def main() -> None:
 
     class Handler(BaseHTTPRequestHandler):
         def admin_authorized(self) -> bool:
-            token = os.environ.get("ADMIN_TOKEN", "")
-            return bool(token) and hmac.compare_digest(
-                self.headers.get("X-Admin-Token", ""), token
+            return bool(admin_token) and hmac.compare_digest(
+                self.headers.get("X-Admin-Token", ""), admin_token
             )
 
         def do_GET(self):
