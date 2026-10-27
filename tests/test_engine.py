@@ -26,6 +26,8 @@ def test_signature_idempotency_and_dead_letter(tmp_path):
     with pytest.raises(PermissionError):
         agent.submit("e1", "sync", body, "wrong", timestamp)
     with pytest.raises(PermissionError):
+        agent.submit("e2", "sync", body, signature, timestamp)
+    with pytest.raises(PermissionError):
         agent.submit("e1", "sync", body, signature, timestamp - 301)
     assert agent.submit("e1", "sync", body, signature, timestamp)
     assert not agent.submit("e1", "sync", body, signature, timestamp)
