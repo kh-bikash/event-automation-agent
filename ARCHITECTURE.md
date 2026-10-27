@@ -27,7 +27,7 @@ The application should propagate failed operations to its caller or queue so the
 
 1. Set secrets through a secret manager and rotate them regularly.
 2. Put the service or integrating application behind TLS and authentication.
-3. Persist SQLite files on durable storage and back them up; migrate to a managed database for high write volume or multiple replicas.
+3. Mount the SQLite queue on durable storage, back it up, and monitor dead letters. Use a shared queue/database before multiple replicas.
 4. Run `pytest -q` in CI before deployment.
 5. Define workload specific evaluation cases, latency objectives, and rollback criteria before serving real users.
 
