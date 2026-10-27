@@ -6,8 +6,9 @@ import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import Request, urlopen
 
-from .engine import EventAutomation
+from .engine import EventAutomation, Workflow
 
 
 def main() -> None:
@@ -19,7 +20,22 @@ def main() -> None:
     def log_event(payload: dict) -> None:
         logging.info("processed event keys=%s", sorted(payload))
 
-    automation = EventAutomation(os.environ.get("APP_DB", "events.sqlite3"), secret, {"log": log_event})
+    workflows = {"log": log_event}
+    forward_url = os.environ.get("WEBHOOK_FORWARD_URL")
+    if forward_url:
+        if not forward_url.startswith("https://"):
+            raise SystemExit("WEBHOOK_FORWARD_URL must use HTTPS")
+        def forward_event(payload: dict) -> None:
+            headers = {"Content-Type": "application/json", "Idempotency-Key": payload["_event_id"]}
+            bearer = os.environ.get("WEBHOOK_FORWARD_TOKEN")
+            if bearer:
+                headers["Authorization"] = "Bearer " + bearer
+            request = Request(forward_url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+            with urlopen(request, timeout=15) as response:
+                if response.status >= 300:
+                    raise RuntimeError("forward failed with HTTP " + str(response.status))
+        workflows["forward"] = Workflow((log_event, forward_event))
+    automation = EventAutomation(os.environ.get("APP_DB", "events.sqlite3"), secret, workflows)
     stop = threading.Event()
 
     def worker() -> None:
@@ -31,15 +47,21 @@ def main() -> None:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path != "/healthz":
+            if self.path == "/healthz":
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            elif self.path == "/metrics" and self.headers.get("X-Admin-Token") == os.environ.get("ADMIN_TOKEN", "") and os.environ.get("ADMIN_TOKEN"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(automation.counts()).encode())
+            else:
                 self.send_error(404)
-                return
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
 
         def do_POST(self):
-            if self.path != "/webhooks/log":
+            workflow = self.path.removeprefix("/webhooks/")
+            if not self.path.startswith("/webhooks/") or workflow not in workflows:
                 self.send_error(404)
                 return
             size = int(self.headers.get("Content-Length", "0"))
@@ -47,7 +69,7 @@ def main() -> None:
                 self.send_error(413)
                 return
             try:
-                created = automation.submit(self.headers.get("X-Event-ID", ""), "log", self.rfile.read(size), self.headers.get("X-Signature-256", ""), int(self.headers.get("X-Timestamp", "0")))
+                created = automation.submit(self.headers.get("X-Event-ID", ""), workflow, self.rfile.read(size), self.headers.get("X-Signature-256", ""), int(self.headers.get("X-Timestamp", "0")))
             except PermissionError:
                 self.send_error(401)
                 return

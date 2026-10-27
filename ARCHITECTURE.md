@@ -30,3 +30,9 @@ The application should propagate failed operations to its caller or queue so the
 3. Persist SQLite files on durable storage and back them up; migrate to a managed database for high write volume or multiple replicas.
 4. Run `pytest -q` in CI before deployment.
 5. Define workload specific evaluation cases, latency objectives, and rollback criteria before serving real users.
+
+## Ingress, queue, and recovery
+
+The HTTP ingress limits request size and checks a five minute timestamp window. HMAC-SHA256 signs `timestamp.event_id.raw_body`, binding the replay key and body. `jobs.id` is unique, so resubmitting the same event is idempotent. The SQLite worker claims due jobs under `BEGIN IMMEDIATE`, sets a lease, and executes one workflow step. `step_index` checkpoints successful steps. Failed steps use exponential backoff until `max_attempts`, then enter `dead`; `requeue_dead` supports operator replay.
+
+`Workflow` can contain several application handlers. The service registers `log` and, when configured, `forward` to a fixed HTTPS endpoint with optional bearer token. `/metrics` requires `ADMIN_TOKEN`. The delivery model is at least once: a crash after an external side effect but before the checkpoint can replay that step. Handlers must use `event_id` or another stable idempotency key at the downstream boundary. Mount `/data` on durable storage and keep one worker process per SQLite database unless the lease and handler timing are validated for the deployment.

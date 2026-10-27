@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import pytest
 import time
-from event_automation_agent.engine import EventAutomation
+from event_automation_agent.engine import EventAutomation, Workflow
 
 
 def test_signature_idempotency_and_dead_letter(tmp_path):
@@ -25,3 +25,17 @@ def test_signature_idempotency_and_dead_letter(tmp_path):
     assert agent.process_one(now=10**12 + 3)
     assert agent.counts()["dead"] == 1 and len(calls) == 2
     assert agent.requeue_dead("e1")
+
+
+def test_workflow_checkpoints_each_step(tmp_path):
+    secret = b"another long secret"
+    calls = []
+    workflow = Workflow((lambda _: calls.append("first"), lambda _: calls.append("second")))
+    agent = EventAutomation(tmp_path / "events.db", secret, {"flow": workflow})
+    body = b"{}"
+    timestamp = int(time.time())
+    signature = hmac.new(secret, str(timestamp).encode() + b".e2." + body, hashlib.sha256).hexdigest()
+    agent.submit("e2", "flow", body, signature, timestamp)
+    assert agent.process_one() and agent.job("e2")[:2] == ("queued", 1)
+    assert agent.process_one() and agent.job("e2")[:2] == ("completed", 2)
+    assert calls == ["first", "second"]
