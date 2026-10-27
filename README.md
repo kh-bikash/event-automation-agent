@@ -4,6 +4,8 @@ Accept timestamped HMAC signed webhooks, queue events with idempotency keys, ret
 
 ## Quick start
 
+The installed `event-agent` command starts the service and operates it. Set `WEBHOOK_SECRET` and `ADMIN_TOKEN`, then run `event-agent serve`. In another terminal, run `event-agent send log '{"source":"example"}'`, `event-agent metrics`, or `event-agent job EVENT_ID`. The service also serves an operator browser at `http://127.0.0.1:8080/` for event submission, queue metrics, job inspection, and dead-letter replay. Enter the admin token in the browser; it is not embedded in the page.
+
 Requires Python 3.11 or newer. From this repository:
 
 ```powershell
@@ -37,6 +39,8 @@ python -m event_automation_agent
 
 ```mermaid
 flowchart LR
+    CLI[Command line] --> Sender
+    Browser[Browser interface] --> Sender
     Sender[Webhook sender] --> Verify[Timestamp and HMAC verification]
     Verify --> Queue[(SQLite idempotent queue)]
     Queue --> Worker[Leased worker]

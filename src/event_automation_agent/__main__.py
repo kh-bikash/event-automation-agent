@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
 from .engine import EventAutomation, Workflow
+from .ui import PAGE
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +21,11 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     secret = os.environ.get("WEBHOOK_SECRET", "").encode()
-    if len(secret) < 16:
-        raise SystemExit("Set WEBHOOK_SECRET to at least 16 bytes")
+    if len(secret) < 16 or secret.startswith(b"replace-"):
+        raise SystemExit("Set a non-example WEBHOOK_SECRET of at least 16 bytes")
     admin_token = os.environ.get("ADMIN_TOKEN", "")
-    if admin_token and len(admin_token) < 16:
-        raise SystemExit("ADMIN_TOKEN must be at least 16 characters")
+    if admin_token and (len(admin_token) < 16 or admin_token.startswith("replace-")):
+        raise SystemExit("Set a non-example ADMIN_TOKEN of at least 16 characters")
 
     def log_event(payload: dict) -> None:
         logger.info("processed event keys=%s", sorted(payload))
@@ -73,7 +76,13 @@ def main() -> None:
             )
 
         def do_GET(self):
-            if self.path == "/healthz":
+            if self.path == "/":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(PAGE)))
+                self.end_headers()
+                self.wfile.write(PAGE)
+            elif self.path == "/healthz":
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"ok")
@@ -99,6 +108,42 @@ def main() -> None:
                 self.send_error(404)
 
         def do_POST(self):
+            if self.path == "/ui/submit":
+                if not self.admin_authorized():
+                    self.send_error(401)
+                    return
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 1_000_000:
+                    self.send_error(413)
+                    return
+                try:
+                    data = json.loads(self.rfile.read(size))
+                    event_id, workflow, payload = (
+                        data["event_id"],
+                        data["workflow"],
+                        data["payload"],
+                    )
+                    if not isinstance(event_id, str) or not isinstance(payload, dict):
+                        raise TypeError("invalid event")
+                    body = json.dumps(payload, separators=(",", ":")).encode()
+                    timestamp = int(time.time())
+                    signed = (
+                        str(timestamp).encode() + b"." + event_id.encode() + b"." + body
+                    )
+                    signature = hmac.new(secret, signed, hashlib.sha256).hexdigest()
+                    created = automation.submit(
+                        event_id, workflow, body, signature, timestamp
+                    )
+                except (ValueError, KeyError, TypeError, PermissionError):
+                    self.send_error(400)
+                    return
+                self.send_response(202 if created else 200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"accepted": created, "event_id": event_id}).encode()
+                )
+                return
             if self.path == "/dead/requeue":
                 if not self.admin_authorized():
                     self.send_error(401)

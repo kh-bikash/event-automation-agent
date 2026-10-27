@@ -9,6 +9,9 @@ description = "Signed webhooks, idempotent jobs, retry, and dead letters."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+event-agent = "event_automation_agent.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff==0.17.3"]
 
