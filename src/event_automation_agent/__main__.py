@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -63,25 +64,58 @@ def main() -> None:
     threading.Thread(target=worker, daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
+        def admin_authorized(self) -> bool:
+            token = os.environ.get("ADMIN_TOKEN", "")
+            return bool(token) and hmac.compare_digest(
+                self.headers.get("X-Admin-Token", ""), token
+            )
+
         def do_GET(self):
             if self.path == "/healthz":
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"ok")
-            elif (
-                self.path == "/metrics"
-                and self.headers.get("X-Admin-Token")
-                == os.environ.get("ADMIN_TOKEN", "")
-                and os.environ.get("ADMIN_TOKEN")
-            ):
+            elif self.path == "/metrics" and self.admin_authorized():
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps(automation.counts()).encode())
+            elif self.path.startswith("/jobs/") and self.admin_authorized():
+                job = automation.job(self.path.removeprefix("/jobs/"))
+                if job is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"status": job[0], "step_index": job[1], "attempts": job[2]}
+                    ).encode()
+                )
             else:
                 self.send_error(404)
 
         def do_POST(self):
+            if self.path == "/dead/requeue":
+                if not self.admin_authorized():
+                    self.send_error(401)
+                    return
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 1000:
+                    self.send_error(413)
+                    return
+                try:
+                    event_id = str(json.loads(self.rfile.read(size))["event_id"])
+                except (ValueError, KeyError, TypeError):
+                    self.send_error(400)
+                    return
+                requeued = automation.requeue_dead(event_id)
+                self.send_response(200 if requeued else 404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"requeued": requeued}).encode())
+                return
             workflow = self.path.removeprefix("/webhooks/")
             if not self.path.startswith("/webhooks/") or workflow not in workflows:
                 self.send_error(404)
