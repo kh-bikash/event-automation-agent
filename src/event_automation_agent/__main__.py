@@ -4,38 +4,55 @@ import json
 import logging
 import os
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
 from .engine import EventAutomation, Workflow
 
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     secret = os.environ.get("WEBHOOK_SECRET", "").encode()
     if len(secret) < 16:
         raise SystemExit("Set WEBHOOK_SECRET to at least 16 bytes")
 
     def log_event(payload: dict) -> None:
-        logging.info("processed event keys=%s", sorted(payload))
+        logger.info("processed event keys=%s", sorted(payload))
 
     workflows = {"log": log_event}
     forward_url = os.environ.get("WEBHOOK_FORWARD_URL")
     if forward_url:
         if not forward_url.startswith("https://"):
             raise SystemExit("WEBHOOK_FORWARD_URL must use HTTPS")
+
         def forward_event(payload: dict) -> None:
-            headers = {"Content-Type": "application/json", "Idempotency-Key": payload["_event_id"]}
+            headers = {
+                "Content-Type": "application/json",
+                "Idempotency-Key": payload["_event_id"],
+            }
             bearer = os.environ.get("WEBHOOK_FORWARD_TOKEN")
             if bearer:
                 headers["Authorization"] = "Bearer " + bearer
-            request = Request(forward_url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+            request = Request(
+                forward_url,
+                data=json.dumps(payload).encode(),
+                headers=headers,
+                method="POST",
+            )
             with urlopen(request, timeout=15) as response:
                 if response.status >= 300:
-                    raise RuntimeError("forward failed with HTTP " + str(response.status))
+                    raise RuntimeError(
+                        "forward failed with HTTP " + str(response.status)
+                    )
+
         workflows["forward"] = Workflow((log_event, forward_event))
-    automation = EventAutomation(os.environ.get("APP_DB", "events.sqlite3"), secret, workflows)
+    automation = EventAutomation(
+        os.environ.get("APP_DB", "events.sqlite3"), secret, workflows
+    )
     stop = threading.Event()
 
     def worker() -> None:
@@ -51,7 +68,12 @@ def main() -> None:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"ok")
-            elif self.path == "/metrics" and self.headers.get("X-Admin-Token") == os.environ.get("ADMIN_TOKEN", "") and os.environ.get("ADMIN_TOKEN"):
+            elif (
+                self.path == "/metrics"
+                and self.headers.get("X-Admin-Token")
+                == os.environ.get("ADMIN_TOKEN", "")
+                and os.environ.get("ADMIN_TOKEN")
+            ):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -69,18 +91,27 @@ def main() -> None:
                 self.send_error(413)
                 return
             try:
-                created = automation.submit(self.headers.get("X-Event-ID", ""), workflow, self.rfile.read(size), self.headers.get("X-Signature-256", ""), int(self.headers.get("X-Timestamp", "0")))
+                created = automation.submit(
+                    self.headers.get("X-Event-ID", ""),
+                    workflow,
+                    self.rfile.read(size),
+                    self.headers.get("X-Signature-256", ""),
+                    int(self.headers.get("X-Timestamp", "0")),
+                )
             except PermissionError:
                 self.send_error(401)
                 return
-            except (ValueError, json.JSONDecodeError):
+            except (ValueError, TypeError, json.JSONDecodeError):
                 self.send_error(400)
                 return
             self.send_response(202 if created else 200)
             self.end_headers()
             self.wfile.write(json.dumps({"accepted": created}).encode())
 
-    server = ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", "8080"))), Handler)
+    server = ThreadingHTTPServer(
+        (os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", "8080"))),
+        Handler,
+    )
     try:
         server.serve_forever()
     finally:
