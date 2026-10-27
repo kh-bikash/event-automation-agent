@@ -35,6 +35,27 @@ python -m event_automation_agent
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Sender[Webhook sender] --> Verify[Timestamp and HMAC verification]
+    Verify --> Queue[(SQLite idempotent queue)]
+    Queue --> Worker[Leased worker]
+    Worker --> Step[Workflow step]
+    Step -->|Success| Checkpoint[(Step checkpoint)]
+    Checkpoint --> Worker
+    Step -->|Transient failure| Retry[Backoff retry]
+    Retry --> Queue
+    Step -->|Attempts exhausted| Dead[(Dead letter)]
+    Dead --> Operator[Admin replay]
+    Operator --> Queue
+```
+
+| Component | Responsibility |
+|---|---|
+| Ingress | Validates signed event ID, timestamp, and bounded JSON body. |
+| Queue | Deduplicates events and persists attempts, leases, and step position. |
+| Worker | Executes registered steps with retry and dead-letter handling. |
+
 HTTP webhook -> timestamp and HMAC verification -> SQLite insert or duplicate detection -> worker lease -> registered handler -> completed, backoff retry, or dead letter.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for components, state, failure behavior, and operations.
