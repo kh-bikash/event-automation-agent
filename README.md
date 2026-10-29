@@ -1,6 +1,17 @@
 # Event Automation Agent
 
-Accept timestamped HMAC signed webhooks, queue events with idempotency keys, retry failures, and retain dead letters.
+## About
+
+This service turns incoming events into reliable background work. It checks that a webhook was signed by a trusted sender, stores the event, and processes it through a workflow. If a step fails, the service retries it with backoff. After repeated failure, it keeps the job in a dead-letter queue so an operator can inspect and replay it.
+
+### What you can do
+
+- Receive signed webhooks without processing the same event ID twice.
+- Run built-in logging or configured HTTPS forwarding workflows.
+- Inspect job status, retry attempts, queue metrics, and dead letters.
+- Add your own multi-step workflow with durable checkpoints.
+
+Run it as a local HTTP service or with Docker Compose; the CLI and operator browser help manage the queue. The browser is an operator interface, and handlers must be safe to repeat because delivery can happen more than once. This service is not deployed at a public URL yet.
 
 ## Quick start
 
