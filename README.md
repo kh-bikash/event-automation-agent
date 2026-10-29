@@ -95,6 +95,49 @@ A Dockerfile is included for the HTTP service. Set secrets through your deployme
 
 `pytest -q` runs deterministic tests. GitHub Actions runs the same suite on pushes and pull requests.
 
+## Product guide
+
+### What happens to an event
+
+1. The sender posts JSON with an event ID, timestamp, and HMAC signature. The ingress checks the signature and timestamp before accepting the body.
+2. The SQLite queue stores the event once by its idempotency key. A duplicate delivery does not create a second independent job.
+3. A worker leases the job and runs its registered workflow steps. Completed steps are checkpointed.
+4. A transient failure schedules another attempt with backoff. Exhausted attempts move to the dead-letter state.
+5. An operator inspects the job and can requeue a dead letter after fixing the underlying problem.
+
+| Interface | Purpose |
+|---|---|
+| `/webhooks/{workflow}` | Signed webhook ingress. |
+| `event-agent send` | Send a signed event from the CLI. |
+| `event-agent job` and `metrics` | Inspect one job or overall queue health. |
+| Operator browser | Submit events, inspect jobs, and replay dead letters with the admin token. |
+
+### Built-in workflows and custom steps
+
+`log` is a safe way to prove the queue and worker are running. `forward` sends the event JSON to a configured HTTPS endpoint when `WEBHOOK_FORWARD_URL` is set; `WEBHOOK_FORWARD_TOKEN` adds bearer authorization. Applications can register a `Workflow` with several steps. Each handler receives `_event_id`, and forwarding includes an `Idempotency-Key` header. Downstream operations must still deduplicate replays because the queue guarantees at-least-once processing, not exactly-once side effects.
+
+### Configuration and operations
+
+| Setting | Purpose |
+|---|---|
+| `WEBHOOK_SECRET` | HMAC key shared with the sender. |
+| `ADMIN_TOKEN` | Access to operator routes and the browser. |
+| `APP_DB` | SQLite queue file. |
+| `WEBHOOK_FORWARD_URL`, `WEBHOOK_FORWARD_TOKEN` | Optional forwarding destination and credential. |
+
+Run `docker compose up --build -d` for a single-node installation with a persisted `agent_data` volume. The supplied Compose file binds to localhost; place TLS and an authenticated reverse proxy in front of a public webhook endpoint. Back up the queue, watch dead-letter counts and retry age, and test replay after changes. [OPERATIONS.md](OPERATIONS.md) covers monitoring, backup, and recovery; [ARCHITECTURE.md](ARCHITECTURE.md) describes the queue and lease model.
+
+### Common issues
+
+| Symptom | Check |
+|---|---|
+| Webhook is rejected | Check the shared secret, timestamp freshness, event ID, and signature over the exact raw body. |
+| A duplicate send does nothing | The event ID is an idempotency key; use a new ID for a new event. |
+| A job remains pending | Confirm the worker is running and inspect lease and retry times. |
+| A job is dead-lettered | Inspect the error and downstream service, fix it, then requeue deliberately. |
+
+Replaying a dead letter can repeat a side effect from an earlier attempt. Use the event ID in downstream idempotency checks, and test that behavior before connecting the service to payments, messaging, or other consequential workflows.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
